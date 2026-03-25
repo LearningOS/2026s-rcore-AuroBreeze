@@ -37,15 +37,15 @@ pub struct TaskManager {
     /// total number of tasks
     num_app: usize,
     /// use inner value to get mutable access
-    inner: UPSafeCell<TaskManagerInner>,
+    pub inner: UPSafeCell<TaskManagerInner>,
 }
 
 /// The task manager inner in 'UPSafeCell'
-struct TaskManagerInner {
+pub struct TaskManagerInner {
     /// task list
-    tasks: Vec<TaskControlBlock>,
+    pub tasks: Vec<TaskControlBlock>,
     /// id of current `Running` task
-    current_task: usize,
+    pub current_task: usize,
 }
 
 lazy_static! {
@@ -201,4 +201,30 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Get the index of syscall id
+pub fn syscall_id_to_index(id: usize) -> Option<usize> {
+    match id {
+        64 => Some(0),
+        93 => Some(1),
+        124 => Some(2),
+        169 => Some(3),
+        214 => Some(4),
+        215 => Some(5),
+        222 => Some(6),
+        410 => Some(7),
+        _ => None,
+    }
+}
+
+/// Get the number of calls
+pub fn get_cnt_calls(_id: usize) -> usize {
+    let id = syscall_id_to_index(_id);
+    if let Some(cnt) = id {
+        let current_task = TASK_MANAGER.inner.exclusive_access().current_task;
+        TASK_MANAGER.inner.exclusive_access().tasks[current_task].trace_counts[cnt]
+    } else {
+        panic!("Invalid syscall id: {}", _id);
+    }
 }
