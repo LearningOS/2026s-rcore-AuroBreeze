@@ -36,15 +36,15 @@ pub struct TaskManager {
     /// total number of tasks
     num_app: usize,
     /// use inner value to get mutable access
-    inner: UPSafeCell<TaskManagerInner>,
+    pub inner: UPSafeCell<TaskManagerInner>,
 }
 
 /// Inner of Task Manager
 pub struct TaskManagerInner {
     /// task list
-    tasks: [TaskControlBlock; MAX_APP_NUM],
+    pub tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
-    current_task: usize,
+    pub current_task: usize,
 }
 
 lazy_static! {
@@ -54,6 +54,7 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            trace_counts: [0; 5],
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -102,6 +103,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
         inner.tasks[current].task_status = TaskStatus::Exited;
+        inner.tasks[current].trace_counts = [0; 5];
     }
 
     /// Find next task to run and return task id.
@@ -168,4 +170,27 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Get the index of syscall id
+pub fn syscall_id_to_index(id: usize) -> Option<usize> {
+    match id {
+        64 => Some(0),
+        93 => Some(1),
+        124 => Some(2),
+        169 => Some(3),
+        410 => Some(4),
+        _ => None,
+    }
+}
+
+/// Get the number of calls
+pub fn get_cnt_calls(_id: usize) -> usize {
+    let id = syscall_id_to_index(_id);
+    if let Some(cnt) = id {
+        let current_task = TASK_MANAGER.inner.exclusive_access().current_task;
+        TASK_MANAGER.inner.exclusive_access().tasks[current_task].trace_counts[cnt]
+    } else {
+        panic!("Invalid syscall id: {}", _id);
+    }
 }
