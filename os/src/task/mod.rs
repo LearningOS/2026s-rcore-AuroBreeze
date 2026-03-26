@@ -219,12 +219,12 @@ pub fn syscall_id_to_index(id: usize) -> Option<usize> {
 }
 
 /// Get the number of calls
-pub fn get_cnt_calls(_id: usize) -> usize {
+pub fn get_cnt_calls(_id: usize) -> isize {
     let id = syscall_id_to_index(_id);
     if let Some(cnt) = id {
         let current_task = TASK_MANAGER.inner.exclusive_access().current_task;
-        TASK_MANAGER.inner.exclusive_access().tasks[current_task].trace_counts[cnt]
+        TASK_MANAGER.inner.exclusive_access().tasks[current_task].trace_counts[cnt] as isize
     } else {
-        panic!("Invalid syscall id: {}", _id);
+        -1
     }
 }

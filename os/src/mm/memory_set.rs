@@ -47,6 +47,112 @@ impl MemorySet {
             areas: Vec::new(),
         }
     }
+
+    /// Remove all mappings in the `MemorySet`.
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        if start % PAGE_SIZE != 0 {
+            return -1;
+        }
+        let start_vpn = VirtAddr::from(start).floor();
+        let end_vpn = VirtAddr::from(start + len).ceil();
+        if start_vpn == end_vpn {
+            return 0;
+        }
+
+        let mut target_idx = None;
+        for (idx, area) in self.areas.iter().enumerate() {
+            if start_vpn >= area.vpn_range.get_start() && end_vpn <= area.vpn_range.get_end() {
+                target_idx = Some(idx);
+                break;
+            }
+        }
+
+        if let Some(idx) = target_idx {
+            let area_start = self.areas[idx].vpn_range.get_start();
+            let area_end = self.areas[idx].vpn_range.get_end();
+
+            if start_vpn == area_start && end_vpn == area_end {
+                let mut removed_area = self.areas.remove(idx);
+                removed_area.unmap(&mut self.page_table);
+                return 0;
+            } else if start_vpn == area_start {
+                for vpn in VPNRange::new(start_vpn, end_vpn) {
+                    self.areas[idx].unmap_one(&mut self.page_table, vpn);
+                }
+                self.areas[idx].vpn_range = VPNRange::new(end_vpn, area_end);
+                return 0;
+            } else if end_vpn == area_end {
+                for vpn in VPNRange::new(start_vpn, end_vpn) {
+                    self.areas[idx].unmap_one(&mut self.page_table, vpn);
+                }
+                self.areas[idx].vpn_range = VPNRange::new(area_start, start_vpn);
+                return 0;
+            } else {
+                for vpn in VPNRange::new(start_vpn, end_vpn) {
+                    self.areas[idx].unmap_one(&mut self.page_table, vpn);
+                }
+                let perm = self.areas[idx].map_perm;
+                self.areas[idx].vpn_range = VPNRange::new(area_start, start_vpn);
+
+                let mut new_area = MapArea::new(
+                    VirtAddr::from(end_vpn),
+                    VirtAddr::from(area_end),
+                    MapType::Framed,
+                    perm,
+                );
+                for vpn in VPNRange::new(end_vpn, area_end) {
+                    if let Some(frame) = self.areas[idx].data_frames.remove(&vpn) {
+                        new_area.data_frames.insert(vpn, frame);
+                    }
+                }
+                self.areas.push(new_area);
+                return 0;
+            }
+        }
+        -1
+    }
+
+    /// Create a new `MemorySet` for kernel space
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> isize {
+        if start % PAGE_SIZE != 0 {
+            return -1;
+        }
+        if prot & !0x7 != 0 || prot & 0x7 == 0 {
+            return -1;
+        }
+
+        let start_vpn = VirtAddr::from(start).floor();
+        let end_vpn = VirtAddr::from(start + len).ceil();
+
+        if start_vpn == end_vpn {
+            return 0;
+        }
+
+        for area in self.areas.iter() {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            if start_vpn < area_end && end_vpn > area_start {
+                return -1;
+            }
+        }
+
+        let mut map_perm = MapPermission::U;
+        if (prot & 1) != 0 {
+            map_perm |= MapPermission::R;
+        }
+        if (prot & 2) != 0 {
+            map_perm |= MapPermission::W;
+        }
+        if (prot & 4) != 0 {
+            map_perm |= MapPermission::X;
+        }
+
+        let new_area = MapArea::new(start_vpn.into(), end_vpn.into(), MapType::Framed, map_perm);
+
+        self.push(new_area, None);
+
+        0
+    }
     /// Get the page table token
     pub fn token(&self) -> usize {
         self.page_table.token()
