@@ -4,13 +4,14 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, Stat, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
+use core::any::Any;
 use easy_fs::{EasyFileSystem, Inode};
 use lazy_static::*;
 
@@ -18,22 +19,47 @@ use lazy_static::*;
 /// A wrapper around a filesystem inode
 /// to implement File trait atop
 pub struct OSInode {
-    readable: bool,
-    writable: bool,
-    inner: UPSafeCell<OSInodeInner>,
+    /// whether the inode is readable
+    pub readable: bool,
+
+    /// whether the inode is writable
+    pub writable: bool,
+    
+    /// the inode
+    pub inner: UPSafeCell<OSInodeInner>,
 }
 /// The OS inode inner in 'UPSafeCell'
 pub struct OSInodeInner {
-    offset: usize,
-    inode: Arc<Inode>,
+    pub offset: usize,
+    pub inode: Arc<Inode>,
 }
 
 impl OSInode {
+    /// Get the stat of the inode
+    pub fn get_stat(&self) -> Option<Stat> {
+        let inner = self.inner.exclusive_access();
+        let is_dir = inner.inode.read_disk_inode(|diskinode| diskinode.is_dir());
+        let inode_id = inner.inode.inode_id as u64;
+        let nlink = inner.inode.read_disk_inode(|diskinode| diskinode.get_nlink_num());
+
+        Some(Stat {
+            dev: 0,
+            nlink,
+            ino: inode_id,
+            mode: if is_dir {
+                StatMode::DIR
+            } else {
+                StatMode::FILE
+            },
+            pad: [0u64; 7],
+        })
+    }
     /// create a new inode in memory
     pub fn new(readable: bool, writable: bool, inode: Arc<Inode>) -> Self {
         Self {
             readable,
             writable,
+
             inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode }) },
         }
     }
@@ -101,6 +127,26 @@ impl OpenFlags {
     }
 }
 
+/// Link a file
+pub fn linkat(old_name: &str, new_name: &str) -> bool {
+    let old_inode = ROOT_INODE.find(old_name);
+
+    if let Some(old_inode) = old_inode {
+        ROOT_INODE.linkat(new_name, &old_inode);
+    }
+    false
+}
+
+/// Unlink a file
+pub fn unlinkat(name: &str) -> bool {
+    let old_inode = ROOT_INODE.find(name);
+    if old_inode.is_none() {
+        false
+    }else{
+        ROOT_INODE.unlinkat(name)
+    }
+}
+
 /// Open a file
 pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     let (readable, writable) = flags.read_write();
@@ -155,5 +201,8 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
